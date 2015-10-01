@@ -1,324 +1,5 @@
-Index: samba/source4/dns_server/dlz_bind9.c
-===================================================================
---- samba.orig/source4/dns_server/dlz_bind9.c	2015-02-24 19:27:53.207395124 +0100
-+++ samba/source4/dns_server/dlz_bind9.c	2015-02-25 09:26:17.000000000 +0100
-@@ -38,6 +38,7 @@
- #include "lib/cmdline/popt_common.h"
- #include "dlz_minimal.h"
- #include "dns_server/dnsserver_common.h"
-+#include "keys_parser.h"
- 
- struct b9_options {
- 	const char *url;
-@@ -46,6 +47,8 @@
- 
- struct dlz_bind9_data {
- 	struct b9_options options;
-+    struct key_list *keys;
-+
- 	struct ldb_context *samdb;
- 	struct tevent_context *ev_ctx;
- 	struct loadparm_context *lp;
-@@ -498,6 +501,7 @@
- {
- 	int opt;
- 	poptContext pc;
-+    int i;
- 	struct poptOption long_options[] = {
- 		{ "url", 'H', POPT_ARG_STRING, &options->url, 0, "database URL", "URL" },
- 		{ "debug", 'd', POPT_ARG_STRING, &options->debug, 0, "debug level", "DEBUG" },
-@@ -518,6 +522,42 @@
- 	return ISC_R_SUCCESS;
- }
- 
-+/*
-+ * Parse keys
-+ */
-+static isc_result_t parse_keys(struct dlz_bind9_data *state)
-+{
-+    const char *keys_file = NULL;
-+    const char *session_key_file = NULL;
-+    struct key_list *kl = NULL;
-+
-+    keys_file = lpcfg_allow_dns_updates_keys_file(state->lp);
-+    session_key_file = lpcfg_allow_dns_updates_session_key_file(state->lp);
-+
-+	state->log(ISC_LOG_INFO, "samba_dlz: loading keys from file '%s'", keys_file);
-+    state->keys = getAST(keys_file);
-+
-+    kl = state->keys;
-+    if (kl != NULL) {
-+        while (kl->next != NULL)
-+            kl = kl->next;
-+    }
-+
-+    state->log(ISC_LOG_INFO, "samba_dlz: loading session key from file '%s'", session_key_file);
-+    if (kl != NULL) {
-+        kl->next = getAST(session_key_file);
-+    } else {
-+        state->keys = getAST(session_key_file);
-+    }
-+
-+    kl = state->keys;
-+    while (kl != NULL) {
-+	    state->log(ISC_LOG_INFO, "samba_dlz: loaded key '%s'", kl->k->name);
-+        kl = kl->next;
-+    }
-+
-+    return ISC_R_SUCCESS;
-+}
- 
- /*
-  * Create session info from PAC
-@@ -657,6 +697,11 @@
- 		lpcfg_do_global_parameter(state->lp, "log level", "0");
- 	}
- 
-+    result = parse_keys(state);
-+    if (result != ISC_R_SUCCESS) {
-+        goto failed;
-+    }
-+
- 	if (smb_krb5_init_context(state, state->lp, &state->smb_krb5_ctx) != 0) {
- 		result = ISC_R_NOMEMORY;
- 		goto failed;
-@@ -1200,75 +1245,66 @@
- 	return ISC_R_SUCCESS;
- }
- 
--/*
--  authorize a zone update
-- */
--_PUBLIC_ isc_boolean_t dlz_ssumatch(const char *signer, const char *name, const char *tcpaddr,
--				    const char *type, const char *key, uint32_t keydatalen, uint8_t *keydata,
--				    void *dbdata)
-+static int b9_get_key_type(struct dlz_bind9_data *state, const char *key)
-+{
-+	char *wkey;
-+	char *tok;
-+	int ktype;
-+	if (key != NULL) {
-+		wkey = strdup(key);
-+		if (wkey == NULL) {
-+			state->log(ISC_LOG_ERROR, "samba_dlz: no memory");
-+			return -1;
-+		}
-+		tok = strtok(wkey, "/");
-+		if (tok == NULL) {
-+			return DST_ALG_UNKNOWN;
-+		}
-+		tok = strtok(NULL, "/");
-+		if (tok == NULL) {
-+			return DST_ALG_UNKNOWN;
-+		}
-+		ktype = (int) strtol(tok, NULL, 10);
-+		free(wkey);
-+		return ktype;
-+	}
-+	return DST_ALG_UNKNOWN;
-+}
-+
-+static bool b9_init_session_info_gssapi(struct dlz_bind9_data *state, TALLOC_CTX *tmp_ctx,
-+		uint32_t keydatalen, uint8_t *keydata,
-+		struct auth_session_info **session_info)
- {
--	struct dlz_bind9_data *state = talloc_get_type_abort(dbdata, struct dlz_bind9_data);
--	TALLOC_CTX *tmp_ctx;
- 	DATA_BLOB ap_req;
- 	struct cli_credentials *server_credentials;
- 	char *keytab_name;
- 	int ret;
--	int ldb_ret;
- 	NTSTATUS nt_status;
- 	struct gensec_security *gensec_ctx;
--	struct auth_session_info *session_info;
--	struct ldb_dn *dn;
--	isc_result_t result;
--	struct ldb_result *res;
--	const char * attrs[] = { NULL };
--	uint32_t access_mask;
--
--	/* Remove cached credentials, if any */
--	if (state->session_info) {
--		talloc_free(state->session_info);
--		state->session_info = NULL;
--	}
--	if (state->update_name) {
--		talloc_free(state->update_name);
--		state->update_name = NULL;
--	}
--
--	tmp_ctx = talloc_new(NULL);
--	if (tmp_ctx == NULL) {
--		state->log(ISC_LOG_ERROR, "samba_dlz: no memory");
--		return ISC_FALSE;
--	}
--
- 	ap_req = data_blob_const(keydata, keydatalen);
- 	server_credentials = cli_credentials_init(tmp_ctx);
- 	if (!server_credentials) {
- 		state->log(ISC_LOG_ERROR, "samba_dlz: failed to init server credentials");
--		talloc_free(tmp_ctx);
--		return ISC_FALSE;
-+		return false;
- 	}
- 
- 	cli_credentials_set_krb5_context(server_credentials, state->smb_krb5_ctx);
- 	cli_credentials_set_conf(server_credentials, state->lp);
- 
--	keytab_name = talloc_asprintf(tmp_ctx, "file:%s/dns.keytab",
--					lpcfg_private_dir(state->lp));
--	ret = cli_credentials_set_keytab_name(server_credentials, state->lp, keytab_name,
--						CRED_SPECIFIED);
-+	keytab_name = talloc_asprintf(tmp_ctx, "file:%s/dns.keytab", lpcfg_private_dir(state->lp));
-+	ret = cli_credentials_set_keytab_name(server_credentials, state->lp, keytab_name, CRED_SPECIFIED);
- 	if (ret != 0) {
--		state->log(ISC_LOG_ERROR, "samba_dlz: failed to obtain server credentials from %s",
--			   keytab_name);
--		talloc_free(tmp_ctx);
--		return ISC_FALSE;
-+		state->log(ISC_LOG_ERROR, "samba_dlz: failed to obtain server credentials from %s", keytab_name);
-+		return false;
- 	}
- 	talloc_free(keytab_name);
- 
- 	nt_status = gensec_server_start(tmp_ctx,
--					lpcfg_gensec_settings(tmp_ctx, state->lp),
--					state->auth_context, &gensec_ctx);
-+			lpcfg_gensec_settings(tmp_ctx, state->lp),
-+			state->auth_context, &gensec_ctx);
- 	if (!NT_STATUS_IS_OK(nt_status)) {
- 		state->log(ISC_LOG_ERROR, "samba_dlz: failed to start gensec server");
--		talloc_free(tmp_ctx);
--		return ISC_FALSE;
-+		return false;
- 	}
- 
- 	gensec_set_credentials(gensec_ctx, server_credentials);
-@@ -1276,24 +1312,114 @@
- 	nt_status = gensec_start_mech_by_name(gensec_ctx, "spnego");
- 	if (!NT_STATUS_IS_OK(nt_status)) {
- 		state->log(ISC_LOG_ERROR, "samba_dlz: failed to start spnego");
--		talloc_free(tmp_ctx);
--		return ISC_FALSE;
-+		return false;
- 	}
- 
- 	nt_status = gensec_update(gensec_ctx, tmp_ctx, state->ev_ctx, ap_req, &ap_req);
- 	if (!NT_STATUS_IS_OK(nt_status)) {
- 		state->log(ISC_LOG_ERROR, "samba_dlz: spnego update failed");
--		talloc_free(tmp_ctx);
--		return ISC_FALSE;
-+		return false;
- 	}
- 
--	nt_status = gensec_session_info(gensec_ctx, tmp_ctx, &session_info);
-+	nt_status = gensec_session_info(gensec_ctx, tmp_ctx, session_info);
- 	if (!NT_STATUS_IS_OK(nt_status)) {
- 		state->log(ISC_LOG_ERROR, "samba_dlz: failed to create session info");
-+		return false;
-+	}
-+
-+	return true;
-+}
-+
-+static bool b9_check_keys(struct dlz_bind9_data *state, const char *signer, const char *keydata)
-+{
-+	struct key_list *kl = state->keys;
-+	if (signer != NULL && keydata != NULL) {
-+		while (kl != NULL) {
-+			struct key *k = kl->k;
-+			if ((strcmp(k->name, signer) == 0) && strcmp(k->secret, keydata) == 0) {
-+				return true;
-+			}
-+			kl = kl->next;
-+		}
-+	}
-+	state->log(ISC_LOG_ERROR, "samba_dlz: disallowing update of signer=%s, invalid key", signer);
-+	return false;
-+}
-+
-+/*
-+  authorize a zone update
-+ */
-+_PUBLIC_ isc_boolean_t dlz_ssumatch(const char *signer, const char *name, const char *tcpaddr,
-+				    const char *type, const char *key, uint32_t keydatalen, uint8_t *keydata,
-+				    void *dbdata)
-+{
-+	struct dlz_bind9_data *state = talloc_get_type_abort(dbdata, struct dlz_bind9_data);
-+	TALLOC_CTX *tmp_ctx;
-+	int ldb_ret;
-+	NTSTATUS nt_status;
-+	struct auth_session_info *session_info;
-+	struct ldb_dn *dn;
-+	isc_result_t result;
-+	struct ldb_result *res;
-+	const char * attrs[] = { NULL };
-+	uint32_t access_mask;
-+
-+	/* Remove cached credentials, if any */
-+	if (state->session_info) {
-+		talloc_free(state->session_info);
-+		state->session_info = NULL;
-+	}
-+	if (state->update_name) {
-+		talloc_free(state->update_name);
-+		state->update_name = NULL;
-+	}
-+
-+	tmp_ctx = talloc_new(NULL);
-+	if (tmp_ctx == NULL) {
-+		state->log(ISC_LOG_ERROR, "samba_dlz: no memory");
-+		return ISC_FALSE;
-+	}
-+
-+	/* Get key type. Format is signed/type/keyid */
-+	int ktype = b9_get_key_type(state, key);
-+	if (ktype < 0) {
- 		talloc_free(tmp_ctx);
- 		return ISC_FALSE;
- 	}
- 
-+	/* Check key */
-+	switch (ktype) {
-+		case DST_ALG_GSSAPI:
-+			if (!b9_init_session_info_gssapi(state, tmp_ctx, keydatalen,
-+						keydata, &session_info)) {
-+				talloc_free(tmp_ctx);
-+				return ISC_FALSE;
-+			}
-+			break;
-+		case DST_ALG_HMACMD5:
-+		case DST_ALG_HMACSHA1:
-+		case DST_ALG_HMACSHA224:
-+		case DST_ALG_HMACSHA256:
-+		case DST_ALG_HMACSHA384:
-+		case DST_ALG_HMACSHA512:
-+			if (!b9_check_keys(state, signer, keydata)) {
-+				talloc_free(tmp_ctx);
-+				return ISC_FALSE;
-+			}
-+
-+			nt_status = auth_system_session_info(tmp_ctx, state->lp, &session_info);
-+			if (!NT_STATUS_IS_OK(nt_status)) {
-+				state->log(ISC_LOG_ERROR, "samba_dlz: failed to create session info");
-+				talloc_free(tmp_ctx);
-+				return ISC_FALSE;
-+			}
-+			break;
-+		default:
-+			state->log(ISC_LOG_ERROR, "samba_dlz: Unknown key type");
-+			return ISC_FALSE;
-+			break;
-+	}
-+
- 	/* Get the DN from name */
- 	result = b9_find_name_dn(state, name, tmp_ctx, &dn);
- 	if (result != ISC_R_SUCCESS) {
-Index: samba/source4/dns_server/dlz_minimal.h
-===================================================================
---- samba.orig/source4/dns_server/dlz_minimal.h	2015-02-24 19:27:53.207395124 +0100
-+++ samba/source4/dns_server/dlz_minimal.h	2015-02-24 19:27:53.199395124 +0100
+--- a/source4/dns_server/dlz_minimal.h
++++ b/source4/dns_server/dlz_minimal.h
 @@ -23,6 +23,11 @@
  #ifndef DLZ_MINIMAL_H
  #define DLZ_MINIMAL_H 1
@@ -331,7 +12,7 @@ Index: samba/source4/dns_server/dlz_minimal.h
  #ifdef BIND_VERSION_9_8
  #define DLZ_DLOPEN_VERSION 1
  #elif BIND_VERSION_9_9
-@@ -72,6 +77,30 @@
+@@ -72,6 +77,30 @@ typedef uint32_t dns_ttl_t;
  #define ISC_LOG_CRITICAL	(-5)
  #define ISC_LOG_DEBUG(level)	(level)
  
@@ -362,7 +43,7 @@ Index: samba/source4/dns_server/dlz_minimal.h
  /* opaque structures */
  typedef void *dns_sdlzlookup_t;
  typedef void *dns_sdlzallnodes_t;
-@@ -223,7 +252,7 @@
+@@ -223,7 +252,7 @@ dlz_allnodes(const char *zone, void *dbd
  isc_result_t
  dlz_newversion(const char *zone, void *dbdata, void **versionp);
  
@@ -371,11 +52,9 @@ Index: samba/source4/dns_server/dlz_minimal.h
   * dlz_closeversion() is optional, but must be supplied if you supply a
   * dlz_newversion() function
   */
-Index: samba/source4/dns_server/wscript_build
-===================================================================
---- samba.orig/source4/dns_server/wscript_build	2015-02-24 19:27:53.207395124 +0100
-+++ samba/source4/dns_server/wscript_build	2015-02-25 09:26:47.735146955 +0100
-@@ -18,7 +18,7 @@
+--- a/source4/dns_server/wscript_build
++++ b/source4/dns_server/wscript_build
+@@ -18,7 +18,7 @@ bld.SAMBA_MODULE('service_dns',
  
  # a bind9 dlz module giving access to the Samba DNS SAM
  bld.SAMBA_LIBRARY('dlz_bind9',
@@ -384,7 +63,7 @@ Index: samba/source4/dns_server/wscript_build
                    cflags='-DBIND_VERSION_9_8',
                    private_library=True,
                    link_name='modules/bind9/dlz_bind9.so',
-@@ -28,7 +28,7 @@
+@@ -28,7 +28,7 @@ bld.SAMBA_LIBRARY('dlz_bind9',
                    enabled=bld.AD_DC_BUILD_IS_ENABLED())
  
  bld.SAMBA_LIBRARY('dlz_bind9_9',
@@ -393,7 +72,7 @@ Index: samba/source4/dns_server/wscript_build
                    cflags='-DBIND_VERSION_9_9',
                    private_library=True,
                    link_name='modules/bind9/dlz_bind9_9.so',
-@@ -38,7 +38,7 @@
+@@ -38,7 +38,7 @@ bld.SAMBA_LIBRARY('dlz_bind9_9',
                    enabled=bld.AD_DC_BUILD_IS_ENABLED())
  
  bld.SAMBA_LIBRARY('dlz_bind9_10',
@@ -402,7 +81,7 @@ Index: samba/source4/dns_server/wscript_build
                    cflags='-DBIND_VERSION_9_10',
                    private_library=True,
                    link_name='modules/bind9/dlz_bind9_10.so',
-@@ -48,7 +48,7 @@
+@@ -48,7 +48,7 @@ bld.SAMBA_LIBRARY('dlz_bind9_10',
                    enabled=bld.AD_DC_BUILD_IS_ENABLED())
  
  bld.SAMBA_LIBRARY('dlz_bind9_for_torture',
@@ -411,10 +90,8 @@ Index: samba/source4/dns_server/wscript_build
                    cflags='-DBIND_VERSION_9_8',
                    private_library=True,
                    deps='samba-hostconfig samdb-common gensec popt dnsserver_common',
-Index: samba/source4/dns_server/keys_parser.l
-===================================================================
---- /dev/null	1970-01-01 00:00:00.000000000 +0000
-+++ samba/source4/dns_server/keys_parser.l	2015-02-24 19:27:53.199395124 +0100
+--- /dev/null
++++ b/source4/dns_server/keys_parser.l
 @@ -0,0 +1,59 @@
 +%{
 +#include "keys_parser.h"
@@ -475,10 +152,8 @@ Index: samba/source4/dns_server/keys_parser.l
 +    return 0;
 +}
 +#endif
-Index: samba/source4/dns_server/k_lexer.c
-===================================================================
---- /dev/null	1970-01-01 00:00:00.000000000 +0000
-+++ samba/source4/dns_server/k_lexer.c	2015-02-24 19:27:53.199395124 +0100
+--- /dev/null
++++ b/source4/dns_server/k_lexer.c
 @@ -0,0 +1,2176 @@
 +#line 2 "k_lexer.c"
 +
@@ -2656,10 +2331,8 @@ Index: samba/source4/dns_server/k_lexer.c
 +}
 +#endif
 +
-Index: samba/source4/dns_server/k_lexer.h
-===================================================================
---- /dev/null	1970-01-01 00:00:00.000000000 +0000
-+++ samba/source4/dns_server/k_lexer.h	2015-02-24 19:27:53.199395124 +0100
+--- /dev/null
++++ b/source4/dns_server/k_lexer.h
 @@ -0,0 +1,355 @@
 +#ifndef yyHEADER_H
 +#define yyHEADER_H 1
@@ -3016,10 +2689,8 @@ Index: samba/source4/dns_server/k_lexer.h
 +#line 354 "k_lexer.h"
 +#undef yyIN_HEADER
 +#endif /* yyHEADER_H */
-Index: samba/source4/dns_server/k_parser.c
-===================================================================
---- /dev/null	1970-01-01 00:00:00.000000000 +0000
-+++ samba/source4/dns_server/k_parser.c	2015-02-24 19:27:53.203395124 +0100
+--- /dev/null
++++ b/source4/dns_server/k_parser.c
 @@ -0,0 +1,1882 @@
 +/* A Bison parser, made by GNU Bison 2.5.  */
 +
@@ -4903,10 +4574,8 @@ Index: samba/source4/dns_server/k_parser.c
 +
 +
 +
-Index: samba/source4/dns_server/k_parser.h
-===================================================================
---- /dev/null	1970-01-01 00:00:00.000000000 +0000
-+++ samba/source4/dns_server/k_parser.h	2015-02-24 19:27:53.203395124 +0100
+--- /dev/null
++++ b/source4/dns_server/k_parser.h
 @@ -0,0 +1,86 @@
 +/* A Bison parser, made by GNU Bison 2.5.  */
 +
@@ -4994,10 +4663,8 @@ Index: samba/source4/dns_server/k_parser.h
 +
 +
 +
-Index: samba/source4/dns_server/keys_parser.h
-===================================================================
---- /dev/null	1970-01-01 00:00:00.000000000 +0000
-+++ samba/source4/dns_server/keys_parser.h	2015-02-24 19:27:53.203395124 +0100
+--- /dev/null
++++ b/source4/dns_server/keys_parser.h
 @@ -0,0 +1,21 @@
 +#ifndef __KEYS_PARSER_H__
 +#define __KEYS_PARSER_H__
@@ -5020,10 +4687,8 @@ Index: samba/source4/dns_server/keys_parser.h
 +struct key_list *getAST(const char *fpath);
 +
 +#endif
-Index: samba/source4/dns_server/keys_parser.y
-===================================================================
---- /dev/null	1970-01-01 00:00:00.000000000 +0000
-+++ samba/source4/dns_server/keys_parser.y	2015-02-24 19:27:53.203395124 +0100
+--- /dev/null
++++ b/source4/dns_server/keys_parser.y
 @@ -0,0 +1,234 @@
 +%{
 +#include <stdio.h>
@@ -5259,13 +4924,11 @@ Index: samba/source4/dns_server/keys_parser.y
 +}
 +
 +
-Index: samba/lib/param/param_table.c
-===================================================================
---- samba.orig/lib/param/param_table.c	2015-02-24 19:27:53.207395124 +0100
-+++ samba/lib/param/param_table.c	2015-02-24 19:27:53.203395124 +0100
-@@ -4208,6 +4208,24 @@
- 		.enum_list	= enum_dns_update_settings,
- 		.flags		= FLAG_ADVANCED,
+--- a/lib/param/param_table.c
++++ b/lib/param/param_table.c
+@@ -4006,6 +4006,24 @@ struct parm_struct parm_table[] = {
+ 		.special	= NULL,
+ 		.enum_list	= NULL
  	},
 +    {
 +        .label      = "allow dns updates keys file",
@@ -5286,64 +4949,11 @@ Index: samba/lib/param/param_table.c
 +        .flags      = FLAG_ADVANCED,
 +    },
  	{
- 		.label		= "dns forwarder",
+ 		.label		= "tls priority",
  		.type		= P_STRING,
-Index: samba/lib/param/loadparm.c
-===================================================================
---- samba.orig/lib/param/loadparm.c	2015-02-24 19:27:53.207395124 +0100
-+++ samba/lib/param/loadparm.c	2015-02-24 19:27:53.203395124 +0100
-@@ -1,4 +1,4 @@
--/* 
-+/*
-    Unix SMB/CIFS implementation.
-    Parameter loading functions
-    Copyright (C) Karl Auer 1993-1998
-@@ -96,7 +96,7 @@
- 	char *tls_crlfile;						\
- 	char *tls_dhpfile;						\
- 	char *loglevel;							\
--	char *panic_action;						
-+	char *panic_action;
- 
- #include "lib/param/param_global.h"
- 
-@@ -951,7 +951,7 @@
- 							 *(char **)src_ptr);
- 					break;
- 				case P_LIST:
--					*(const char ***)dest_ptr = (const char **)str_list_copy(pserviceDest, 
-+					*(const char ***)dest_ptr = (const char **)str_list_copy(pserviceDest,
- 										  *(const char ***)src_ptr);
- 					break;
- 				default:
-@@ -1403,7 +1403,7 @@
- 				}
- 			}
- 			if (!parm_table[parmnum].enum_list[i].name) {
--				DEBUG(0,("Unknown enumerated value '%s' for '%s'\n", 
-+				DEBUG(0,("Unknown enumerated value '%s' for '%s'\n",
- 					 pszParmValue, pszParmName));
- 				return false;
- 			}
-@@ -1654,7 +1654,7 @@
- 			break;
- 
- 		case P_OCTAL: {
--			int val = *(int *)ptr; 
-+			int val = *(int *)ptr;
- 			if (val == -1) {
- 				fprintf(f, "-1");
- 			} else {
-@@ -1796,7 +1796,7 @@
- 	switch (parm_table[i].type) {
- 		case P_CMDLIST:
- 		case P_LIST:
--			return str_list_equal((const char **)parm_table[i].def.lvalue, 
-+			return str_list_equal((const char **)parm_table[i].def.lvalue,
- 					      (const char **)def_ptr);
- 		case P_STRING:
- 		case P_USTRING:
-@@ -2223,8 +2223,10 @@
+--- a/lib/param/loadparm.c
++++ b/lib/param/loadparm.c
+@@ -2547,8 +2547,10 @@ struct loadparm_context *loadparm_init(T
  	lpcfg_do_global_parameter(lp_ctx, "rndc command", "/usr/sbin/rndc");
  	lpcfg_do_global_parameter(lp_ctx, "nsupdate command", "/usr/bin/nsupdate -g");
  
@@ -5354,79 +4964,11 @@ Index: samba/lib/param/loadparm.c
 +	lpcfg_do_global_parameter(lp_ctx, "allow dns updates session key file", "/run/named/session.key");
 +	lpcfg_do_global_parameter(lp_ctx, "dns forwarder", "");
  
-     lpcfg_do_global_parameter(lp_ctx, "ldap privileged socket mode", "0750");
+ 	lpcfg_do_global_parameter(lp_ctx, "ldap privileged socket mode", "0750");
  
-@@ -2265,7 +2267,7 @@
- /**
-  * Initialise the global parameter structure.
-  */
--struct loadparm_context *loadparm_init_s3(TALLOC_CTX *mem_ctx, 
-+struct loadparm_context *loadparm_init_s3(TALLOC_CTX *mem_ctx,
- 					  const struct loadparm_s3_helpers *s3_fns)
- {
- 	struct loadparm_context *loadparm_context = talloc_zero(mem_ctx, struct loadparm_context);
-@@ -2290,7 +2292,7 @@
- }
- 
- /**
-- * Update the internal state of a loadparm context after settings 
-+ * Update the internal state of a loadparm context after settings
-  * have changed.
-  */
- static bool lpcfg_update(struct loadparm_context *lp_ctx)
-@@ -2323,7 +2325,7 @@
- 	settings.debug_class = lp_ctx->globals->bDebugClass;
- 	debug_set_settings(&settings);
- 
--	/* FIXME: This is a bit of a hack, but we can't use a global, since 
-+	/* FIXME: This is a bit of a hack, but we can't use a global, since
- 	 * not everything that uses lp also uses the socket library */
- 	if (lpcfg_parm_bool(lp_ctx, NULL, "socket", "testnonblock", false)) {
- 		setenv("SOCKET_TESTNONBLOCK", "1", 1);
-@@ -2341,7 +2343,7 @@
-     path = lp_default_path();
- 
-     if (!file_exist(path)) {
--	    /* We allow the default smb.conf file to not exist, 
-+	    /* We allow the default smb.conf file to not exist,
- 	     * basically the equivalent of an empty file. */
- 	    return lpcfg_update(lp_ctx);
-     }
-Index: samba/lib/param/param.h
-===================================================================
---- samba.orig/lib/param/param.h	2015-02-24 19:27:53.207395124 +0100
-+++ samba/lib/param/param.h	2015-02-24 19:27:53.207395124 +0100
-@@ -1,24 +1,24 @@
--/* 
-+/*
-    Unix SMB/CIFS implementation.
-    Generic parameter parsing interface
-    Copyright (C) Jelmer Vernooij					  2005
--   
-+
-    This program is free software; you can redistribute it and/or modify
-    it under the terms of the GNU General Public License as published by
-    the Free Software Foundation; either version 3 of the License, or
-    (at your option) any later version.
--   
-+
-    This program is distributed in the hope that it will be useful,
-    but WITHOUT ANY WARRANTY; without even the implied warranty of
-    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-    GNU General Public License for more details.
--   
-+
-    You should have received a copy of the GNU General Public License
-    along with this program.  If not, see <http://www.gnu.org/licenses/>.
- */
- 
- #ifndef _PARAM_H /* _PARAM_H */
--#define _PARAM_H 
-+#define _PARAM_H
- 
- struct loadparm_s3_helpers;
- 
-@@ -57,6 +57,8 @@
+--- a/lib/param/param.h
++++ b/lib/param/param.h
+@@ -62,6 +62,8 @@ const char *lpcfg_netbios_name(struct lo
  const char *lpcfg_private_dir(struct loadparm_context *);
  int lpcfg_server_role(struct loadparm_context *);
  int lpcfg_allow_dns_updates(struct loadparm_context *);
@@ -5435,47 +4977,339 @@ Index: samba/lib/param/param.h
  
  void reload_charcnv(struct loadparm_context *lp_ctx);
  
-@@ -218,7 +220,7 @@
- /* The following definitions come from param/generic.c  */
+--- a/source4/dns_server/dlz_bind9.c
++++ b/source4/dns_server/dlz_bind9.c
+@@ -39,6 +39,7 @@
+ #include "lib/util/dlinklist.h"
+ #include "dlz_minimal.h"
+ #include "dns_server/dnsserver_common.h"
++#include "keys_parser.h"
  
- struct param_section *param_get_section(struct param_context *ctx, const char *name);
--struct parmlist_entry *param_section_get(struct param_section *section, 
-+struct parmlist_entry *param_section_get(struct param_section *section,
- 				    const char *name);
- struct parmlist_entry *param_get (struct param_context *ctx, const char *name, const char *section_name);
- struct param_section *param_add_section(struct param_context *ctx, const char *section_name);
-@@ -250,7 +252,7 @@
- 			      const char *domain);
+ struct b9_options {
+ 	const char *url;
+@@ -52,6 +53,7 @@ struct b9_zone {
  
- /**
--  see if a string matches either our primary or one of our secondary 
-+  see if a string matches either our primary or one of our secondary
-   netbios aliases. do a case insensitive match
- */
- bool lpcfg_is_myname(struct loadparm_context *lp_ctx, const char *name);
-@@ -300,10 +302,10 @@
+ struct dlz_bind9_data {
+ 	struct b9_options options;
++	struct key_list *keys;
+ 	struct ldb_context *samdb;
+ 	struct tevent_context *ev_ctx;
+ 	struct loadparm_context *lp;
+@@ -525,6 +527,40 @@ static isc_result_t parse_options(struct
+ 	return ISC_R_SUCCESS;
+ }
  
- /**
-   return a path in the smbd.tmp directory, where all temporary file
--  for smbd go. If NULL is passed for name then return the directory 
-+  for smbd go. If NULL is passed for name then return the directory
-   path itself
- */
--char *smbd_tmp_path(TALLOC_CTX *mem_ctx, 
-+char *smbd_tmp_path(TALLOC_CTX *mem_ctx,
- 			     struct loadparm_context *lp_ctx,
- 			     const char *name);
++/*
++ * Parse keys
++ */
++static isc_result_t parse_keys(struct dlz_bind9_data *state)
++{
++	const char *keys_file = NULL;
++	const char *session_key_file = NULL;
++	struct key_list *kl = NULL;
++
++	keys_file = lpcfg_allow_dns_updates_keys_file(state->lp);
++	session_key_file = lpcfg_allow_dns_updates_session_key_file(state->lp);
++
++	state->log(ISC_LOG_INFO, "samba_dlz: loading keys from file '%s'", keys_file);
++	state->keys = getAST(keys_file);
++
++	kl = state->keys;
++	if (kl != NULL) {
++		while (kl->next != NULL)
++			kl = kl->next;
++	}
++
++	state->log(ISC_LOG_INFO, "samba_dlz: loading session key from file '%s'", session_key_file);
++	if (kl != NULL)
++		kl->next = getAST(session_key_file);
++	else
++		state->keys = getAST(session_key_file);
++	kl = state->keys;
++	while (kl != NULL) {
++		state->log(ISC_LOG_INFO, "samba_dlz: loaded key '%s'", kl->k->name);
++		kl = kl->next;
++	}
++
++	return ISC_R_SUCCESS;
++}
  
-Index: samba/lib/param/param_functions.c
-===================================================================
---- samba.orig/lib/param/param_functions.c	2015-02-24 19:27:53.207395124 +0100
-+++ samba/lib/param/param_functions.c	2015-02-24 19:27:53.207395124 +0100
-@@ -268,6 +268,8 @@
- FN_GLOBAL_INTEGER(afs_token_lifetime, iAfsTokenLifetime)
- FN_GLOBAL_INTEGER(algorithmic_rid_base, AlgorithmicRidBase)
- FN_GLOBAL_INTEGER(allow_dns_updates, allow_dns_updates)
-+FN_GLOBAL_CONST_STRING(allow_dns_updates_keys_file, allow_dns_updates_keys_file)
-+FN_GLOBAL_CONST_STRING(allow_dns_updates_session_key_file, allow_dns_updates_session_key_file)
- FN_GLOBAL_INTEGER(cldap_port, cldap_port)
- FN_GLOBAL_INTEGER(client_ldap_sasl_wrapping, client_ldap_sasl_wrapping)
- FN_GLOBAL_INTEGER(client_schannel, clientSchannel)
+ /*
+  * Create session info from PAC
+@@ -664,6 +700,11 @@ _PUBLIC_ isc_result_t dlz_create(const c
+ 		lpcfg_do_global_parameter(state->lp, "log level", "0");
+ 	}
+ 
++	result = parse_keys(state);
++	if (result != ISC_R_SUCCESS) {
++		goto failed;
++	}
++
+ 	if (smb_krb5_init_context(state, state->lp, &state->smb_krb5_ctx) != 0) {
+ 		result = ISC_R_NOMEMORY;
+ 		goto failed;
+@@ -1254,75 +1295,64 @@ _PUBLIC_ isc_result_t dlz_configure(dns_
+ 	return ISC_R_SUCCESS;
+ }
+ 
+-/*
+-  authorize a zone update
+- */
+-_PUBLIC_ isc_boolean_t dlz_ssumatch(const char *signer, const char *name, const char *tcpaddr,
+-				    const char *type, const char *key, uint32_t keydatalen, uint8_t *keydata,
+-				    void *dbdata)
++static int b9_get_key_type(struct dlz_bind9_data *state, const char *key)
++{
++	char *wkey, *tok;
++	int ktype;
++
++	if (key == NULL) return DST_ALG_UNKNOWN;
++	wkey = strdup(key);
++	if (wkey == NULL) {
++		state->log(ISC_LOG_ERROR, "samba_dlz: no memory");
++		return -1;
++	}
++	tok = strtok(wkey, "/");
++	if (tok == NULL) return DST_ALG_UNKNOWN;
++	tok = strtok(NULL, "/");
++	if (tok == NULL) return DST_ALG_UNKNOWN;
++	ktype = (int) strtol(tok, NULL, 10);
++	free(wkey);
++	return ktype;
++}
++
++static bool b9_init_session_info_gssapi(struct dlz_bind9_data *state, TALLOC_CTX *tmp_ctx,
++                                        uint32_t keydatalen, uint8_t *keydata,
++                                        struct auth_session_info **session_info)
+ {
+-	struct dlz_bind9_data *state = talloc_get_type_abort(dbdata, struct dlz_bind9_data);
+-	TALLOC_CTX *tmp_ctx;
+ 	DATA_BLOB ap_req;
+ 	struct cli_credentials *server_credentials;
+ 	char *keytab_name;
+ 	int ret;
+-	int ldb_ret;
+ 	NTSTATUS nt_status;
+ 	struct gensec_security *gensec_ctx;
+-	struct auth_session_info *session_info;
+-	struct ldb_dn *dn;
+-	isc_result_t result;
+-	struct ldb_result *res;
+-	const char * attrs[] = { NULL };
+-	uint32_t access_mask;
+-
+-	/* Remove cached credentials, if any */
+-	if (state->session_info) {
+-		talloc_free(state->session_info);
+-		state->session_info = NULL;
+-	}
+-	if (state->update_name) {
+-		talloc_free(state->update_name);
+-		state->update_name = NULL;
+-	}
+-
+-	tmp_ctx = talloc_new(NULL);
+-	if (tmp_ctx == NULL) {
+-		state->log(ISC_LOG_ERROR, "samba_dlz: no memory");
+-		return ISC_FALSE;
+-	}
+ 
+ 	ap_req = data_blob_const(keydata, keydatalen);
+ 	server_credentials = cli_credentials_init(tmp_ctx);
+ 	if (!server_credentials) {
+ 		state->log(ISC_LOG_ERROR, "samba_dlz: failed to init server credentials");
+-		talloc_free(tmp_ctx);
+-		return ISC_FALSE;
++		return false;
+ 	}
+ 
+ 	cli_credentials_set_krb5_context(server_credentials, state->smb_krb5_ctx);
+ 	cli_credentials_set_conf(server_credentials, state->lp);
+ 
+-	keytab_name = talloc_asprintf(tmp_ctx, "FILE:%s/dns.keytab",
+-					lpcfg_private_dir(state->lp));
++	keytab_name = talloc_asprintf(tmp_ctx, "file:%s/dns.keytab",
++	                              lpcfg_private_dir(state->lp));
+ 	ret = cli_credentials_set_keytab_name(server_credentials, state->lp, keytab_name,
+-						CRED_SPECIFIED);
++	                                      CRED_SPECIFIED);
+ 	if (ret != 0) {
+-		state->log(ISC_LOG_ERROR, "samba_dlz: failed to obtain server credentials from %s",
+-			   keytab_name);
+-		talloc_free(tmp_ctx);
+-		return ISC_FALSE;
++		state->log(ISC_LOG_ERROR, "samba_dlz: failed to obtain server credentials "
++		           "from %s", keytab_name);
++		return false;
+ 	}
+ 	talloc_free(keytab_name);
+ 
+ 	nt_status = gensec_server_start(tmp_ctx,
+-					lpcfg_gensec_settings(tmp_ctx, state->lp),
+-					state->auth_context, &gensec_ctx);
++	                                lpcfg_gensec_settings(tmp_ctx, state->lp),
++	                                state->auth_context, &gensec_ctx);
+ 	if (!NT_STATUS_IS_OK(nt_status)) {
+ 		state->log(ISC_LOG_ERROR, "samba_dlz: failed to start gensec server");
+-		talloc_free(tmp_ctx);
+-		return ISC_FALSE;
++		return false;
+ 	}
+ 
+ 	gensec_set_credentials(gensec_ctx, server_credentials);
+@@ -1330,24 +1360,113 @@ _PUBLIC_ isc_boolean_t dlz_ssumatch(cons
+ 	nt_status = gensec_start_mech_by_name(gensec_ctx, "spnego");
+ 	if (!NT_STATUS_IS_OK(nt_status)) {
+ 		state->log(ISC_LOG_ERROR, "samba_dlz: failed to start spnego");
+-		talloc_free(tmp_ctx);
+-		return ISC_FALSE;
++		return false;
+ 	}
+ 
+-	nt_status = gensec_update_ev(gensec_ctx, tmp_ctx, state->ev_ctx, ap_req, &ap_req);
++	nt_status = gensec_update(gensec_ctx, tmp_ctx, state->ev_ctx, ap_req, &ap_req);
+ 	if (!NT_STATUS_IS_OK(nt_status)) {
+ 		state->log(ISC_LOG_ERROR, "samba_dlz: spnego update failed");
+-		talloc_free(tmp_ctx);
+-		return ISC_FALSE;
++		return false;
+ 	}
+ 
+-	nt_status = gensec_session_info(gensec_ctx, tmp_ctx, &session_info);
++	nt_status = gensec_session_info(gensec_ctx, tmp_ctx, session_info);
+ 	if (!NT_STATUS_IS_OK(nt_status)) {
+ 		state->log(ISC_LOG_ERROR, "samba_dlz: failed to create session info");
++		return false;
++	}
++
++	return true;
++}
++
++static bool b9_check_keys(struct dlz_bind9_data *state, const char *signer, const char *keydata)
++{
++	struct key_list *kl = state->keys;
++	if (signer != NULL && keydata != NULL) {
++		while (kl != NULL) {
++			struct key *k = kl->k;
++			if ((strcmp(k->name, signer) == 0) && strcmp(k->secret, keydata) == 0) {
++				return true;
++			}
++			kl = kl->next;
++		}
++	}
++	state->log(ISC_LOG_ERROR, "samba_dlz: disallowing update of signer=%s, invalid key", signer);
++	return false;
++}
++
++/*
++  authorize a zone update
++ */
++_PUBLIC_ isc_boolean_t dlz_ssumatch(const char *signer, const char *name, const char *tcpaddr,
++				    const char *type, const char *key, uint32_t keydatalen, uint8_t *keydata,
++				    void *dbdata)
++{
++	struct dlz_bind9_data *state = talloc_get_type_abort(dbdata, struct dlz_bind9_data);
++	TALLOC_CTX *tmp_ctx;
++	int ldb_ret, ktype;
++	NTSTATUS nt_status;
++	struct auth_session_info *session_info;
++	struct ldb_dn *dn;
++	isc_result_t result;
++	struct ldb_result *res;
++	const char * attrs[] = { NULL };
++	uint32_t access_mask;
++
++	/* Remove cached credentials, if any */
++	if (state->session_info) {
++		talloc_free(state->session_info);
++		state->session_info = NULL;
++	}
++	if (state->update_name) {
++		talloc_free(state->update_name);
++		state->update_name = NULL;
++	}
++
++	tmp_ctx = talloc_new(NULL);
++	if (tmp_ctx == NULL) {
++		state->log(ISC_LOG_ERROR, "samba_dlz: no memory");
++		return ISC_FALSE;
++	}
++
++	/* Get ket type. Format is signed/type/keyid */
++	ktype = b9_get_ket_type(state, key);
++	if (ktype < 0) {
+ 		talloc_free(tmp_ctx);
+ 		return ISC_FALSE;
+ 	}
+ 
++	switch (ktype) {
++	case DST_ALG_GSSAPI:
++		if (!b9_init_session_info_gssapi(state, tmp_ctx, keydatalen,
++			keydata, &session_info)) {
++			talloc_free(tmp_ctx);
++			return ISC_FALSE;
++		}
++		break;
++	case DST_ALG_HMACMD5:
++	case DST_ALG_HMACSHA1:
++	case DST_ALG_HMACSHA224:
++	case DST_ALG_HMACSHA256:
++	case DST_ALG_HMACSHA384:
++	case DST_ALG_HMACSHA512:
++		if (!b9_check_keys(state, signer, keydata)) {
++			talloc_free(tmp_ctx);
++			return ISC_FALSE;
++		}
++
++		nt_status = auth_system_session_info(tmp_ctx, state->lp, &session_info);
++		if (!NT_STATUS_IS_OK(nt_status)) {
++			state->log(ISC_LOG_ERROR, "samba_dlz: failed to create session info");
++			talloc_free(tmp_ctx);
++			return ISC_FALSE;
++		}
++		break;
++	default:
++		state->log(ISC_LOG_ERROR, "samba_dlz: Unknown key type");
++		return ISC_FALSE;
++		break;
++	}
++
+ 	/* Get the DN from name */
+ 	result = b9_find_name_dn(state, name, tmp_ctx, &dn);
+ 	if (result != ISC_R_SUCCESS) {
+--- /dev/null
++++ b/docs-xml/smbdotconf/domain/allowdnsupdateskeysfile.xml
+@@ -0,0 +1,15 @@
++<samba:parameter name="allow dns updates keys file"
++                 context="G"
++                 type="string"
++                 xmlns:samba="http://www.samba.org/samba/DTD/samba-doc">
++<description>
++	<para>This option specifies the DNS server directory with keys.
++	</para>
++
++	<para>The DNS forwarder is only used if the internal DNS server
++		in Samba is used.
++	</para>
++</description>
++
++<value type="default">/etc/bind/keys</value>
++</samba:parameter>
+--- /dev/null
++++ b/docs-xml/smbdotconf/domain/allowdnsupdatessessionkeyfile.xml
+@@ -0,0 +1,15 @@
++<samba:parameter name="allow dns updates session key file"
++                 context="G"
++                 type="string"
++                 xmlns:samba="http://www.samba.org/samba/DTD/samba-doc">
++<description>
++	<para>This option specifies the DNS server the session key file.
++	</para>
++
++	<para>The option is only used if the internal DNS server
++		in Samba is used.
++	</para>
++</description>
++
++<value type="default">/run/named/session.key</value>
++</samba:parameter>
