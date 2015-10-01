@@ -9,11 +9,9 @@ Subject: [PATCH] auth: Fallback to guest account if user not found in SAM and
  source4/auth/sam.c           | 13 +++++++--
  2 files changed, 69 insertions(+), 8 deletions(-)
 
-diff --git a/source4/auth/ntlm/auth_sam.c b/source4/auth/ntlm/auth_sam.c
-index f234f72..b062106 100644
 --- a/source4/auth/ntlm/auth_sam.c
 +++ b/source4/auth/ntlm/auth_sam.c
-@@ -57,14 +57,58 @@ static NTSTATUS authsam_search_account(TALLOC_CTX *mem_ctx, struct ldb_context *
+@@ -58,14 +58,58 @@ static NTSTATUS authsam_search_account(T
  			      "(&(sAMAccountName=%s)(objectclass=user))",
  			      ldb_binary_encode_string(mem_ctx, account_name));
  	if (ret == LDB_ERR_NO_SUCH_OBJECT) {
@@ -76,17 +74,8 @@ index f234f72..b062106 100644
  	return NT_STATUS_OK;
  }
  
-@@ -175,7 +219,7 @@ static NTSTATUS authsam_authenticate(struct auth4_context *auth_context,
- 				     struct ldb_dn *domain_dn,
- 				     struct ldb_message *msg,
- 				     const struct auth_usersupplied_info *user_info, 
--				     DATA_BLOB *user_sess_key, DATA_BLOB *lm_sess_key) 
-+				     DATA_BLOB *user_sess_key, DATA_BLOB *lm_sess_key)
- {
- 	struct samr_Password *lm_pwd, *nt_pwd;
- 	NTSTATUS nt_status;
-@@ -200,6 +244,13 @@ static NTSTATUS authsam_authenticate(struct auth4_context *auth_context,
- 	NT_STATUS_NOT_OK_RETURN(nt_status);
+@@ -223,6 +267,13 @@ static NTSTATUS authsam_password_check_a
+ 	}
  
  	if (lm_pwd == NULL && nt_pwd == NULL) {
 +		if (acct_flags & ACB_PWNOTREQ) {
@@ -94,30 +83,14 @@ index f234f72..b062106 100644
 +				user_info->mapped.account_name));
 +			*user_sess_key = data_blob(NULL, 0);
 +			*lm_sess_key = data_blob(NULL, 0);
-+			goto check_account;
++			return NT_STATUS_OK;
 +		}
  		bool am_rodc;
  		if (samdb_rodc(auth_context->sam_ctx, &am_rodc) == LDB_SUCCESS && am_rodc) {
- 			/* we don't have passwords for this
-@@ -218,11 +269,12 @@ static NTSTATUS authsam_authenticate(struct auth4_context *auth_context,
- 		}
- 	}
- 
--	nt_status = authsam_password_ok(auth_context, mem_ctx, 
-+	nt_status = authsam_password_ok(auth_context, mem_ctx,
- 					acct_flags, lm_pwd, nt_pwd,
- 					user_info, user_sess_key, lm_sess_key);
- 	NT_STATUS_NOT_OK_RETURN(nt_status);
- 
-+check_account:
- 	nt_status = authsam_account_ok(mem_ctx, auth_context->sam_ctx,
- 				       user_info->logon_parameters,
- 				       domain_dn,
-diff --git a/source4/auth/sam.c b/source4/auth/sam.c
-index 767e44c..d279d11 100644
+ 			/*
 --- a/source4/auth/sam.c
 +++ b/source4/auth/sam.c
-@@ -283,7 +283,7 @@ _PUBLIC_ NTSTATUS authsam_make_user_info_dc(TALLOC_CTX *mem_ctx,
+@@ -293,7 +293,7 @@ _PUBLIC_ NTSTATUS authsam_make_user_info
  	struct auth_user_info *info;
  	const char *str, *filter;
  	/* SIDs for the account and his primary group */
@@ -126,7 +99,7 @@ index 767e44c..d279d11 100644
  	const char *primary_group_string;
  	const char *primary_group_dn;
  	DATA_BLOB primary_group_blob;
-@@ -314,6 +314,9 @@ _PUBLIC_ NTSTATUS authsam_make_user_info_dc(TALLOC_CTX *mem_ctx,
+@@ -333,6 +333,9 @@ _PUBLIC_ NTSTATUS authsam_make_user_info
  		return status;
  	}
  
@@ -136,7 +109,7 @@ index 767e44c..d279d11 100644
  	sids[PRIMARY_USER_SID_INDEX] = *account_sid;
  	sids[PRIMARY_GROUP_SID_INDEX] = *domain_sid;
  	sid_append_rid(&sids[PRIMARY_GROUP_SID_INDEX], ldb_msg_find_attr_as_uint(msg, "primaryGroupID", ~0));
-@@ -461,7 +464,13 @@ _PUBLIC_ NTSTATUS authsam_make_user_info_dc(TALLOC_CTX *mem_ctx,
+@@ -514,7 +517,13 @@ _PUBLIC_ NTSTATUS authsam_make_user_info
  		user_info_dc->num_sids++;
  	}
  
@@ -151,6 +124,3 @@ index 767e44c..d279d11 100644
  
  	talloc_free(tmp_ctx);
  	*_user_info_dc = user_info_dc;
--- 
-1.8.3.2
-
