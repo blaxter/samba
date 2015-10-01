@@ -27,7 +27,6 @@ xsltproc_dont_build_smb.conf.5.patch
 46-Add-test-for-guest-access-to-SMB-and-LDAP.patch
 47-Test-guest-access-in-domain-member-environment.patch
 48-vfs-recycle-inherit-nt-acls.patch
-s4-auth-krb-Fix-talloc-access-after-free-in-smb_krb5.patch
 49-dlz-bind9-skip-loading-duplicated-zones
 51-Order-switch-statements.patch
 s4-auth-ntlm-Add-config-key-to-allow-users-with-email-address-format.patch
