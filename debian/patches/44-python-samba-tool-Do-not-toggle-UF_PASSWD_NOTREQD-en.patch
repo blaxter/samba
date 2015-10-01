@@ -8,11 +8,9 @@ Subject: [PATCH] python samba-tool: Do not toggle UF_PASSWD_NOTREQD enabling
  python/samba/samdb.py | 2 +-
  1 file changed, 1 insertion(+), 1 deletion(-)
 
-diff --git a/python/samba/samdb.py b/python/samba/samdb.py
-index 2dfc839..ec3e2fd 100644
 --- a/python/samba/samdb.py
 +++ b/python/samba/samdb.py
-@@ -99,7 +99,7 @@ class SamDB(samba.Ldb):
+@@ -100,7 +100,7 @@ class SamDB(samba.Ldb):
              samccountname=name)
          """
  
@@ -21,6 +19,3 @@ index 2dfc839..ec3e2fd 100644
          self.toggle_userAccountFlags(search_filter, flags, on=False)
  
      def toggle_userAccountFlags(self, search_filter, flags, flags_str=None,
--- 
-1.8.3.2
-

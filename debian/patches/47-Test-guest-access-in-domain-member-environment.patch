@@ -8,11 +8,9 @@ Subject: [PATCH] Test guest access in domain member environment
  source4/torture/unix/guest.c | 185 ++++++++++++++++++++++++++-----------------
  2 files changed, 116 insertions(+), 72 deletions(-)
 
-diff --git a/source3/selftest/tests.py b/source3/selftest/tests.py
-index 01c5cae..e8a08d9 100755
 --- a/source3/selftest/tests.py
 +++ b/source3/selftest/tests.py
-@@ -312,7 +312,8 @@ for t in tests:
+@@ -322,7 +322,8 @@ for t in tests:
              plansmbtorture4testsuite(t, env, '//$SERVER/tmp -k yes -U$DC_USERNAME@$REALM%$DC_PASSWORD --option=torture:addc=$DC_SERVER', description='kerberos connection')
              plansmbtorture4testsuite(t, env, '//$SERVER/tmpguest -U% --option=torture:addc=$DC_SERVER', description='anonymous connection')
      elif t == "unix.guest":
@@ -20,10 +18,8 @@ index 01c5cae..e8a08d9 100755
 +        for env in ["plugin_s4_dc", "s3member"]:
 +            plansmbtorture4testsuite(t, env, '//$SERVER/tmpguest -U$DC_USERNAME@$REALM%$DC_PASSWORD --option=torture:addc=$DC_SERVER')
      elif t == "raw.samba3posixtimedlock":
-         plansmbtorture4testsuite(t, "s3dc", '//$SERVER_IP/tmpguest -U$USERNAME%$PASSWORD --option=torture:localdir=$SELFTEST_PREFIX/s3dc/share')
-         plansmbtorture4testsuite(t, "plugin_s4_dc", '//$SERVER_IP/tmpguest -U$USERNAME%$PASSWORD --option=torture:localdir=$SELFTEST_PREFIX/plugin_s4_dc/share')
-diff --git a/source4/torture/unix/guest.c b/source4/torture/unix/guest.c
-index 16f9617..0ddb22d 100644
+         plansmbtorture4testsuite(t, "nt4_dc", '//$SERVER_IP/tmpguest -U$USERNAME%$PASSWORD --option=torture:localdir=$SELFTEST_PREFIX/nt4_dc/share')
+         plansmbtorture4testsuite(t, "ad_dc", '//$SERVER_IP/tmpguest -U$USERNAME%$PASSWORD --option=torture:localdir=$SELFTEST_PREFIX/ad_dc/share')
 --- a/source4/torture/unix/guest.c
 +++ b/source4/torture/unix/guest.c
 @@ -19,6 +19,7 @@
@@ -34,7 +30,7 @@ index 16f9617..0ddb22d 100644
  #include "param/param.h"
  #include "ndr.h"
  #include "librpc/ndr/ndr_table.h"
-@@ -91,6 +92,8 @@ static bool samr_Close(struct torture_context *tctx,
+@@ -91,6 +92,8 @@ static bool samr_Close(struct torture_co
  {
  	struct samr_Close r;
  
@@ -43,7 +39,7 @@ index 16f9617..0ddb22d 100644
  	r.in.handle = handle;
  	r.out.handle = handle;
  
-@@ -222,6 +225,8 @@ static bool guest_acct_toggle_enabled(struct torture_context *tctx,
+@@ -222,6 +225,8 @@ static bool guest_acct_toggle_enabled(st
  	ZERO_STRUCT(domain_handle);
  	ZERO_STRUCT(user_handle);
  
@@ -52,7 +48,7 @@ index 16f9617..0ddb22d 100644
  	ret = samr_Connect(tctx, b, &server_handle);
  	torture_assert(tctx, ret, "Failed SAMR connect");
  
-@@ -307,6 +312,8 @@ static bool guest_acct_set_password(struct torture_context *tctx,
+@@ -307,6 +312,8 @@ static bool guest_acct_set_password(stru
  	DATA_BLOB session_key;
  	bool ret;
  
@@ -61,7 +57,7 @@ index 16f9617..0ddb22d 100644
  	ZERO_STRUCT(server_handle);
  	ZERO_STRUCT(domain_handle);
  	ZERO_STRUCT(user_handle);
-@@ -377,12 +384,13 @@ static NTSTATUS connect_smb(struct torture_context *tctx,
+@@ -377,12 +384,13 @@ static NTSTATUS connect_smb(struct tortu
  			struct smbcli_state **cli)
  {
  	NTSTATUS status;
@@ -76,7 +72,7 @@ index 16f9617..0ddb22d 100644
  	lpcfg_smbcli_options(tctx->lp_ctx, &options);
  	lpcfg_smbcli_session_options(tctx->lp_ctx, &session_options);
  
-@@ -469,6 +477,8 @@ static bool smb_raw_query_posix_whoami(void *mem_ctx,
+@@ -469,6 +477,8 @@ static bool smb_raw_query_posix_whoami(v
  	uint16_t setup = TRANSACT2_QFSINFO;
  	uint16_t info_level;
  
@@ -85,7 +81,7 @@ index 16f9617..0ddb22d 100644
  	ZERO_STRUCTP(whoami);
  
  	tp.in.max_setup = 0;
-@@ -601,9 +611,9 @@ static bool smb_raw_query_posix_whoami(void *mem_ctx,
+@@ -601,9 +611,9 @@ static bool smb_raw_query_posix_whoami(v
  static bool connect_ldap(struct torture_context *tctx,
  			TALLOC_CTX *mem_ctx,
  			struct cli_credentials *creds,
@@ -96,7 +92,7 @@ index 16f9617..0ddb22d 100644
  	char *uri = talloc_asprintf(mem_ctx, "ldap://%s", host);
  
  	*ldap = ldb_wrap_connect(mem_ctx, tctx->ev, tctx->lp_ctx, uri, NULL,
-@@ -637,6 +647,7 @@ static bool check_guest_ldap(struct torture_context *tctx,
+@@ -637,6 +647,7 @@ static bool check_guest_ldap(struct tort
  			"Number of SIDs from LDAP needs to be more than 0");
  
  	if (is_dc) {
@@ -104,7 +100,7 @@ index 16f9617..0ddb22d 100644
  		torture_assert_int_equal(tctx, el->num_values,
  				whoami->num_sids,
  				"Number of SIDs from LDAP and number of "
-@@ -659,39 +670,40 @@ static bool check_guest_ldap(struct torture_context *tctx,
+@@ -659,39 +670,40 @@ static bool check_guest_ldap(struct tort
  			talloc_free(sid);
  		}
  	} else {
@@ -178,7 +174,7 @@ index 16f9617..0ddb22d 100644
  	}
  	return true;
  }
-@@ -712,6 +724,8 @@ static bool check_guest_smb(struct torture_context *tctx,
+@@ -712,6 +724,8 @@ static bool check_guest_smb(struct tortu
  	ret = smb_raw_query_posix_whoami(tctx, tctx, cli, whoami);
  	torture_assert(tctx, ret, "Failed SMB_QFS_POSIX_WHOAMI");
  
@@ -187,7 +183,7 @@ index 16f9617..0ddb22d 100644
  	/* The guest flag must be enabled */
  	torture_comment(tctx, "Checking SMB_WHOAMI_GUEST flag\n");
  	ret = whoami->mapping_mask & SMB_WHOAMI_GUEST;
-@@ -723,19 +737,19 @@ static bool check_guest_smb(struct torture_context *tctx,
+@@ -723,19 +737,19 @@ static bool check_guest_smb(struct tortu
  	torture_assert(tctx, (whoami->num_sids >= 2), "Invalid SID count");
  
  	/* The logged in user SID must be the guest SID */
@@ -210,7 +206,7 @@ index 16f9617..0ddb22d 100644
  	has_builtin_guests_token = false;
  	has_builtin_users_token = false;
  
-@@ -764,12 +778,10 @@ static bool build_sids(struct torture_context *tctx, TALLOC_CTX *mem_ctx,
+@@ -764,12 +778,10 @@ static bool build_sids(struct torture_co
  {
  	struct dcerpc_binding_handle *b = p->binding_handle;
  	struct policy_handle server_handle;
@@ -223,7 +219,7 @@ index 16f9617..0ddb22d 100644
  
  	ret = samr_Connect(tctx, b, &server_handle);
  	torture_assert(tctx, ret, "Failed SAMR connect");
-@@ -778,9 +790,6 @@ static bool build_sids(struct torture_context *tctx, TALLOC_CTX *mem_ctx,
+@@ -778,9 +790,6 @@ static bool build_sids(struct torture_co
  			lpcfg_workgroup(tctx->lp_ctx), &tmp);
  	torture_assert(tctx, ret, "Failed SAMR domain lookup");
  
@@ -233,7 +229,7 @@ index 16f9617..0ddb22d 100644
  	ret = samr_Close(tctx, b, &server_handle);
  	torture_assert(tctx, ret, "Failed SAMR close");
  
-@@ -813,7 +822,9 @@ static bool build_sids(struct torture_context *tctx, TALLOC_CTX *mem_ctx,
+@@ -813,7 +822,9 @@ static bool build_sids(struct torture_co
  static bool check_guest(struct torture_context *tctx,
  			TALLOC_CTX *mem_ctx,
  			struct guest_test_context *ctx,
@@ -244,7 +240,7 @@ index 16f9617..0ddb22d 100644
  {
  	NTSTATUS status;
  	struct smbcli_state *cli = NULL;
-@@ -829,12 +840,15 @@ static bool check_guest(struct torture_context *tctx,
+@@ -829,12 +840,15 @@ static bool check_guest(struct torture_c
  	ret = check_guest_smb(tctx, ctx, cli, whoami);
  	torture_assert(tctx, ret, "Failed guest access tokens check");
  
@@ -262,7 +258,7 @@ index 16f9617..0ddb22d 100644
  	TALLOC_FREE(whoami);
  	TALLOC_FREE(cli);
  
-@@ -844,15 +858,25 @@ static bool check_guest(struct torture_context *tctx,
+@@ -844,15 +858,25 @@ static bool check_guest(struct torture_c
  bool torture_unix_guest(struct torture_context *tctx)
  {
  	struct dcerpc_pipe *p = NULL;
@@ -288,7 +284,7 @@ index 16f9617..0ddb22d 100644
  
  	tmp_ctx = talloc_new(tctx);
  	torture_assert(tctx, tmp_ctx, "talloc_new failed");
-@@ -860,9 +884,18 @@ bool torture_unix_guest(struct torture_context *tctx)
+@@ -860,9 +884,18 @@ bool torture_unix_guest(struct torture_c
  	ctx = talloc_zero(tmp_ctx, struct guest_test_context);
  	torture_assert(tctx, ctx, "talloc_zero failed");
  
@@ -310,7 +306,7 @@ index 16f9617..0ddb22d 100644
  
  	/* Build necessary SIDs for the test */
  	ret = build_sids(tctx, tmp_ctx, p, ctx);
-@@ -875,18 +908,18 @@ bool torture_unix_guest(struct torture_context *tctx)
+@@ -875,18 +908,18 @@ bool torture_unix_guest(struct torture_c
  	torture_assert(tctx, ret, "Failed to disable guest account");
  
  	/* Try to login with an invalid user, must get logon failure */
@@ -333,7 +329,7 @@ index 16f9617..0ddb22d 100644
  	TALLOC_FREE(creds);
  	TALLOC_FREE(cli);
  
-@@ -895,14 +928,18 @@ bool torture_unix_guest(struct torture_context *tctx)
+@@ -895,14 +928,18 @@ bool torture_unix_guest(struct torture_c
  	torture_assert(tctx, ret, "Failed to enable guest account");
  
  	/* Try to login with an invalid user and check the tokens */
@@ -357,7 +353,7 @@ index 16f9617..0ddb22d 100644
  	torture_assert(tctx, ret, "Failed guest test");
  	TALLOC_FREE(creds);
  
-@@ -911,31 +948,37 @@ bool torture_unix_guest(struct torture_context *tctx)
+@@ -911,31 +948,37 @@ bool torture_unix_guest(struct torture_c
  	torture_assert(tctx, ret, "Failed to set guest account password");
  
  	/* Try to login with an invalid user (bad pwd), get logon failure */
@@ -408,6 +404,3 @@ index 16f9617..0ddb22d 100644
  	torture_assert(tctx, ret, "Failed guest test");
  	TALLOC_FREE(creds);
  
--- 
-1.8.3.2
-
