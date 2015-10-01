@@ -30,5 +30,4 @@ xsltproc_dont_build_smb.conf.5.patch
 49-dlz-bind9-skip-loading-duplicated-zones
 s4-auth-ntlm-Add-config-key-to-allow-users-with-email-address-format.patch
 getncchanges_max_obj_count.patch
-dcerpc_notifications.patch
 close-on-exec.patch
