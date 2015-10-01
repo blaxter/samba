@@ -60,3 +60,4 @@ docs-xml/Samba3-HOWTO/images/trusts1.png
 .testrepository
 bin/.confcache/*/*
 bin/.conf_check_*/*
+.pc/
