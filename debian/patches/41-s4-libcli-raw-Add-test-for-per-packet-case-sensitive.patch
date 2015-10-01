@@ -14,11 +14,9 @@ Signed-off-by: Samuel Cabrero <scabrero@zentyal.com>
  5 files changed, 80 insertions(+), 3 deletions(-)
  create mode 100644 source4/torture/raw/case_sensitive.c
 
-diff --git a/source3/selftest/tests.py b/source3/selftest/tests.py
-index e8a08d9..14f9893 100755
 --- a/source3/selftest/tests.py
 +++ b/source3/selftest/tests.py
-@@ -252,7 +252,7 @@ raw = ["raw.acls", "raw.chkpath", "raw.close", "raw.composite", "raw.context", "
+@@ -263,7 +263,7 @@ raw = ["raw.acls", "raw.chkpath", "raw.c
         "raw.qfileinfo", "raw.qfsinfo", "raw.read", "raw.rename", "raw.search", "raw.seek",
         "raw.sfileinfo.base", "raw.sfileinfo.bug", "raw.streams", "raw.unlink", "raw.write",
         "raw.samba3hide", "raw.samba3badpath", "raw.sfileinfo.rename", "raw.session",
@@ -27,22 +25,17 @@ index e8a08d9..14f9893 100755
         "raw.samba3rootdirfid", "raw.sfileinfo.end-of-file",
         "raw.bench-oplock", "raw.bench-lock", "raw.bench-open", "raw.bench-tcon",
         "raw.samba3checkfsp", "raw.samba3closeerr", "raw.samba3oplocklogoff", "raw.samba3badnameblob"]
-diff --git a/source4/selftest/tests.py b/source4/selftest/tests.py
-index e738d1d..560356a 100755
 --- a/source4/selftest/tests.py
 +++ b/source4/selftest/tests.py
-@@ -224,7 +224,7 @@ ntvfsargs = ["--option=torture:sharedelay=10000", "--option=torture:oplocktimeou
+@@ -238,7 +238,7 @@ ntvfsargs = ["--option=torture:sharedela
+ smb2 = filter(lambda x: "smb2.change_notify_disabled" not in x, smbtorture4_testsuites("smb2."))
  
- smb2 = smbtorture4_testsuites("smb2.")
  #The QFILEINFO-IPC test needs to be on ipc$
 -raw = filter(lambda x: "raw.qfileinfo.ipc" not in x, smbtorture4_testsuites("raw."))
 +raw = filter(lambda x: x not in ["raw.case_sensitive", "raw.qfileinfo.ipc"], smbtorture4_testsuites("raw."))
  base = smbtorture4_testsuites("base.")
  
  netapi = smbtorture4_testsuites("netapi.")
-diff --git a/source4/torture/raw/case_sensitive.c b/source4/torture/raw/case_sensitive.c
-new file mode 100644
-index 0000000..d2d3413
 --- /dev/null
 +++ b/source4/torture/raw/case_sensitive.c
 @@ -0,0 +1,76 @@
@@ -122,8 +115,6 @@ index 0000000..d2d3413
 +
 +	return ret;
 +}
-diff --git a/source4/torture/raw/raw.c b/source4/torture/raw/raw.c
-index bda463b..80032f8 100644
 --- a/source4/torture/raw/raw.c
 +++ b/source4/torture/raw/raw.c
 @@ -76,6 +76,7 @@ NTSTATUS torture_raw_init(void)
@@ -134,8 +125,6 @@ index bda463b..80032f8 100644
  
  	suite->description = talloc_strdup(suite, "Tests for the raw SMB interface");
  
-diff --git a/source4/torture/wscript_build b/source4/torture/wscript_build
-index 5297f1c..fd437c3 100755
 --- a/source4/torture/wscript_build
 +++ b/source4/torture/wscript_build
 @@ -19,7 +19,7 @@ bld.SAMBA_MODULE('TORTURE_BASIC',
@@ -147,6 +136,3 @@ index 5297f1c..fd437c3 100755
  	autoproto='raw/proto.h',
  	subsystem='smbtorture',
  	init_function='torture_raw_init',
--- 
-1.8.3.2
-

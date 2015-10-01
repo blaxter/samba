@@ -9,11 +9,9 @@ Signed-off-by: Samuel Cabrero <scabrero@zentyal.com>
  source4/libcli/pysmb.c | 7 ++-----
  1 file changed, 2 insertions(+), 5 deletions(-)
 
-diff --git a/source4/libcli/pysmb.c b/source4/libcli/pysmb.c
-index a24dbd8..608f7cd 100644
 --- a/source4/libcli/pysmb.c
 +++ b/source4/libcli/pysmb.c
-@@ -545,12 +545,9 @@ static PyObject *py_smb_case_sensitive(pytalloc_Object *self, PyObject *args)
+@@ -541,12 +541,9 @@ static PyObject *py_smb_case_sensitive(p
  
  	spdata = self->ptr;
  	status = smbcli_set_case_sensitive(spdata->tree, sensitive);
@@ -28,6 +26,3 @@ index a24dbd8..608f7cd 100644
  }
  
  static PyMethodDef py_smb_methods[] = {
--- 
-1.8.3.2
-
