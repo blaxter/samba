@@ -1,8 +1,6 @@
-Index: samba4-4.1.0rc4/source3/modules/vfs_scannedonly.c
-===================================================================
---- samba4-4.1.0rc4.orig/source3/modules/vfs_scannedonly.c	2013-10-25 16:28:03.287241208 +0200
-+++ samba4-4.1.0rc4/source3/modules/vfs_scannedonly.c	2013-10-25 16:28:41.311277624 +0200
-@@ -50,289 +50,260 @@
+--- a/source3/modules/vfs_scannedonly.c
++++ b/source3/modules/vfs_scannedonly.c
+@@ -50,291 +50,261 @@
  #include "includes.h"
  #include "smbd/smbd.h"
  #include "system/filesys.h"
@@ -252,15 +250,15 @@ Index: samba4-4.1.0rc4/source3/modules/vfs_scannedonly.c
 +		 * we hit a large directory with lots of unscanned files. */
  		int sndsize;
  		socklen_t size = sizeof(int);
--		getsockopt(so->socket, SOL_SOCKET, SO_RCVBUF,
--			   (char *)&sndsize, &size);
--		DEBUG(SCANNEDONLY_DEBUG, ("current socket buffer size=%d\n",
--					  sndsize));
-+		getsockopt(data->socket, SOL_SOCKET, SO_RCVBUF, (char *)&sndsize,
-+			 &size);
-+		DEBUG(SCANNEDONLY_DEBUG,
-+			("%s: current socket buffer size=%d\n", __func__,
-+				sndsize));
+-		if (getsockopt(so->socket, SOL_SOCKET, SO_RCVBUF,
+-			       (char *)&sndsize, &size) == 0) {
++		if (getsockopt(data->socket, SOL_SOCKET, SO_RCVBUF,
++		               (char *)&sndsize, &size) == 0) {
+ 			DEBUG(SCANNEDONLY_DEBUG,
+-			      ("current socket buffer size=%d\n",
++			      ("%s: current socket buffer size=%d\n", __func__,
+ 			       sndsize));
+ 		}
  		sndsize = 262144;
 -		if (setsockopt(so->socket, SOL_SOCKET, SO_RCVBUF,
 +		if (setsockopt(data->socket, SOL_SOCKET, SO_RCVBUF,
@@ -442,7 +440,7 @@ Index: samba4-4.1.0rc4/source3/modules/vfs_scannedonly.c
  {
  	if (shortname[0]!='.') {
  		return false;
-@@ -355,391 +326,209 @@
+@@ -357,391 +327,209 @@ static bool timespec_is_newer(struct tim
  }
  
  /*
@@ -697,7 +695,7 @@ Index: samba4-4.1.0rc4/source3/modules/vfs_scannedonly.c
 -
 -static DIR *scannedonly_opendir(vfs_handle_struct * handle,
 -					   const char *fname,
--					   const char *mask, uint32 attr)
+-					   const char *mask, uint32_t attr)
 -{
 -	DIR *DIRp;
 -	struct scannedonly_DIR *sDIR;
@@ -722,7 +720,7 @@ Index: samba4-4.1.0rc4/source3/modules/vfs_scannedonly.c
 -
 -static DIR *scannedonly_fdopendir(vfs_handle_struct * handle,
 -					   files_struct *fsp,
--					   const char *mask, uint32 attr)
+-					   const char *mask, uint32_t attr)
 -{
 -	DIR *DIRp;
 -	struct scannedonly_DIR *sDIR;
@@ -855,16 +853,16 @@ Index: samba4-4.1.0rc4/source3/modules/vfs_scannedonly.c
 -	struct scannedonly_DIR *sDIR = (struct scannedonly_DIR *)dirp;
 -	SMB_VFS_NEXT_SEEKDIR(handle, sDIR->DIR, offset);
 -}
--
++			("%s: Checking if %s should be hidden to the user\n",
++				__func__, d->d_name));
+ 
 -static long scannedonly_telldir(struct vfs_handle_struct *handle,
 -				DIR * dirp)
 -{
 -	struct scannedonly_DIR *sDIR = (struct scannedonly_DIR *)dirp;
 -	return SMB_VFS_NEXT_TELLDIR(handle, sDIR->DIR);
 -}
-+			("%s: Checking if %s should be hidden to the user\n",
-+				__func__, d->d_name));
- 
+-
 -static void scannedonly_rewinddir(struct vfs_handle_struct *handle,
 -				  DIR * dirp)
 -{
@@ -969,7 +967,7 @@ Index: samba4-4.1.0rc4/source3/modules/vfs_scannedonly.c
  	/* if open for writing ignore it */
  	if ((flags & O_ACCMODE) == O_WRONLY) {
  		return SMB_VFS_NEXT_OPEN(handle, smb_fname, fsp, flags, mode);
-@@ -747,45 +536,68 @@
+@@ -749,45 +537,68 @@ static int scannedonly_open(vfs_handle_s
  	if ((flags & O_ACCMODE) == O_RDWR) {
  		write_access = 1;
  	}
@@ -1066,7 +1064,7 @@ Index: samba4-4.1.0rc4/source3/modules/vfs_scannedonly.c
  	}
  	return SMB_VFS_NEXT_CLOSE(handle, fsp);
  }
-@@ -794,102 +606,240 @@
+@@ -796,102 +607,240 @@ static int scannedonly_rename(vfs_handle
  			      const struct smb_filename *smb_fname_src,
  			      const struct smb_filename *smb_fname_dst)
  {
@@ -1181,6 +1179,16 @@ Index: samba4-4.1.0rc4/source3/modules/vfs_scannedonly.c
 -	TALLOC_CTX *ctx = talloc_tos();
 +	char *cachefile = NULL;
 +	TALLOC_CTX *mem_ctx = NULL;
++
++	SMB_VFS_HANDLE_GET_DATA(handle, data, struct Tscannedonly,
++			return -1);
++
++	mem_ctx = talloc_new(handle);
++	if (!mem_ctx) {
++		DEBUG(0, ("%s: No memory\n", __func__));
++		errno = ENOMEM;
++		return -1;
++	}
  
 -	cachefile = cachefile_name_f_fullpath(
 -		ctx,
@@ -1190,16 +1198,6 @@ Index: samba4-4.1.0rc4/source3/modules/vfs_scannedonly.c
 -	if (SMB_VFS_NEXT_UNLINK(handle, smb_fname_cache) != 0) {
 -		DEBUG(SCANNEDONLY_DEBUG, ("_unlink: failed to unlink %s\n",
 -					  smb_fname_cache->base_name));
-+	SMB_VFS_HANDLE_GET_DATA(handle, data, struct Tscannedonly,
-+			return -1);
-+
-+	mem_ctx = talloc_new(handle);
-+	if (!mem_ctx) {
-+		DEBUG(0, ("%s: No memory\n", __func__));
-+		errno = ENOMEM;
-+		return -1;
- 	}
-+
 +	/* unlink the 'scanned' file too */
 +	cachefile = cachefile_name_f_fullpath(mem_ctx,
 +		smb_fname->base_name, data->p_scanned);
@@ -1208,7 +1206,7 @@ Index: samba4-4.1.0rc4/source3/modules/vfs_scannedonly.c
 +		DEBUG(0, ("%s: No memory\n", __func__));
 +		errno = ENOMEM;
 +		return -1;
-+	}
+ 	}
 +
 +	smb_fname_cache = synthetic_smb_fname(mem_ctx, cachefile, NULL, NULL);
 +	if (!smb_fname_cache) {
@@ -1355,7 +1353,7 @@ Index: samba4-4.1.0rc4/source3/modules/vfs_scannedonly.c
  			retval = SMB_VFS_NEXT_STAT(handle, smb_fname);
  			if (retval == 0
  			    && S_ISREG(smb_fname->st.st_ex_mode)) {
-@@ -901,37 +851,113 @@
+@@ -903,37 +852,113 @@ static int scannedonly_rmdir(vfs_handle_
  		}
  	}
  	DEBUG(SCANNEDONLY_DEBUG,
@@ -1481,7 +1479,7 @@ Index: samba4-4.1.0rc4/source3/modules/vfs_scannedonly.c
  }
  
  static int scannedonly_connect(struct vfs_handle_struct *handle,
-@@ -940,14 +966,15 @@
+@@ -942,14 +967,15 @@ static int scannedonly_connect(struct vf
  
  	struct Tscannedonly *so;
  
@@ -1501,7 +1499,7 @@ Index: samba4-4.1.0rc4/source3/modules/vfs_scannedonly.c
  	so->domain_socket =
  		lp_parm_bool(SNUM(handle->conn), "scannedonly",
  			     "domain_socket", True);
-@@ -968,17 +995,9 @@
+@@ -970,17 +996,9 @@ static int scannedonly_connect(struct vf
  	so->rm_hidden_files_on_rmdir =
  		lp_parm_bool(SNUM(handle->conn), "scannedonly",
  			     "rm_hidden_files_on_rmdir", True);
@@ -1519,7 +1517,7 @@ Index: samba4-4.1.0rc4/source3/modules/vfs_scannedonly.c
  	so->recheck_time_open =
  		lp_parm_int(SNUM(handle->conn), "scannedonly",
  			    "recheck_time_open", 50);
-@@ -988,12 +1007,6 @@
+@@ -990,12 +1008,6 @@ static int scannedonly_connect(struct vf
  	so->recheck_size_open =
  		lp_parm_int(SNUM(handle->conn), "scannedonly",
  			    "recheck_size_open", 100);
@@ -1532,7 +1530,7 @@ Index: samba4-4.1.0rc4/source3/modules/vfs_scannedonly.c
  
  	so->p_scanned =
  		lp_parm_const_string(SNUM(handle->conn),
-@@ -1010,28 +1023,27 @@
+@@ -1012,28 +1024,27 @@ static int scannedonly_connect(struct vf
  					     "scannedonly",
  					     "pref_failed",
  					     ".failed:");
