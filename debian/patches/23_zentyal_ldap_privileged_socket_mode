@@ -1,6 +1,6 @@
 --- a/lib/param/param_table.c
 +++ b/lib/param/param_table.c
-@@ -982,6 +982,15 @@ struct parm_struct parm_table[] = {
+@@ -982,6 +982,14 @@ struct parm_struct parm_table[] = {
  		.special	= NULL,
  		.enum_list	= NULL,
  	},
@@ -8,12 +8,11 @@
 +        .label      = "ldap privileged socket mode",
 +        .type       = P_OCTAL,
 +        .p_class    = P_GLOBAL,
-+        .offset     = GLOBAL_VAR(iLdap_priv_socket_mode),
++        .offset     = GLOBAL_VAR(ldap_privileged_socket_mode),
 +        .special    = NULL,
 +        .enum_list  = NULL,
-+        .flags      = FLAG_ADVANCED | FLAG_GLOBAL,
 +    },
- 
+
  	{
  		.label		= "guest ok",
 --- a/lib/param/loadparm.c
