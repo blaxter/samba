@@ -4926,7 +4926,7 @@
 +
 --- a/lib/param/param_table.c
 +++ b/lib/param/param_table.c
-@@ -4006,6 +4006,24 @@ struct parm_struct parm_table[] = {
+@@ -4006,6 +4006,22 @@ struct parm_struct parm_table[] = {
  		.special	= NULL,
  		.enum_list	= NULL
  	},
@@ -4937,7 +4937,6 @@
 +        .offset     = GLOBAL_VAR(allow_dns_updates_keys_file),
 +        .special    = NULL,
 +        .enum_list  = NULL,
-+        .flags      = FLAG_ADVANCED,
 +    },
 +    {
 +        .label      = "allow dns updates session key file",
@@ -4946,7 +4945,6 @@
 +        .offset     = GLOBAL_VAR(allow_dns_updates_session_key_file),
 +        .special    = NULL,
 +        .enum_list  = NULL,
-+        .flags      = FLAG_ADVANCED,
 +    },
  	{
  		.label		= "tls priority",
@@ -4965,17 +4963,6 @@
 +	lpcfg_do_global_parameter(lp_ctx, "dns forwarder", "");
  
  	lpcfg_do_global_parameter(lp_ctx, "ldap privileged socket mode", "0750");
- 
---- a/lib/param/param.h
-+++ b/lib/param/param.h
-@@ -62,6 +62,8 @@ const char *lpcfg_netbios_name(struct lo
- const char *lpcfg_private_dir(struct loadparm_context *);
- int lpcfg_server_role(struct loadparm_context *);
- int lpcfg_allow_dns_updates(struct loadparm_context *);
-+const char *lpcfg_allow_dns_updates_keys_file(struct loadparm_context *);
-+const char *lpcfg_allow_dns_updates_session_key_file(struct loadparm_context *);
- 
- void reload_charcnv(struct loadparm_context *lp_ctx);
  
 --- a/source4/dns_server/dlz_bind9.c
 +++ b/source4/dns_server/dlz_bind9.c
