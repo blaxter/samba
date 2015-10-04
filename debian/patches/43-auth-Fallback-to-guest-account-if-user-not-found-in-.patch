@@ -53,8 +53,8 @@ Subject: [PATCH] auth: Fallback to guest account if user not found in SAM and
 +			return NT_STATUS_NO_SUCH_USER;
 +		}
 +		/* Return no such user if the account is disabled */
-+		uint16_t acct_flags = samdb_result_acct_flags(sam_ctx, mem_ctx,
-+			*ret_msg, domain_dn);
++		uint16_t acct_flags = samdb_result_acct_flags(*ret_msg, NULL);
++
 +		if (acct_flags & ACB_DISABLED) {
 +			DEBUG(3,("%s: Account for guest user is disabled.\n",
 +					__func__));
