@@ -7,6 +7,10 @@ if [ "$1" = "configure" ]; then
 	SERVER_ROLE="$RET"
 fi
 
+if [ "$1" = "triggered" ]; then
+    /sbin/restart samba-ad-dc || true
+fi
+
 if [ "$1" = "configure" -a "$SERVER_ROLE" != "none" ]; then
 	db_get samba-common/workgroup || true
 	DOMAIN="$RET"
