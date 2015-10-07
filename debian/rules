@@ -45,7 +45,7 @@ conf_args = \
 		--with-utmp \
 		--with-pam_smbpass \
 		--with-winbind \
-		--with-shared-modules=idmap_rid,idmap_ad,idmap_adex,idmap_hash,idmap_ldap,vfs_dfs_samba4,auth_samba4 \
+		--with-shared-modules=idmap_rid,idmap_ad,idmap_adex,idmap_hash,idmap_ldap,idmap_tdb2,vfs_dfs_samba4,auth_samba4 \
 		--with-automount \
 		--with-ldap \
 		--with-ads \
@@ -59,7 +59,7 @@ conf_args = \
 		--disable-avahi \
 		--disable-rpath \
 		--disable-rpath-install \
-		--bundled-libraries=NONE,pytevent,iniparser \
+		--bundled-libraries=NONE,pytevent,iniparser,roken,wind,hx509,asn1,heimbase,hcrypto,krb5,gssapi,heimntlm,hdb,kdc,com_err,compile_et,asn1_compile \
 		--builtin-libraries=replace,ccan \
 		--minimum-library-version="$(shell ./debian/autodeps.py --minimum-library-version)"
 
@@ -91,12 +91,12 @@ override_dh_install:
 	# get list of files in build log
 	find ${DESTDIR}
 	# MIT plugin not required, we are using Heimdal
-	rm $(DESTDIR)/usr/lib/$(DEB_HOST_MULTIARCH)/mit_samba.so
+	#rm $(DESTDIR)/usr/lib/$(DEB_HOST_MULTIARCH)/mit_samba.so
 	# Included in python-tevent
 	rm $(DESTDIR)/usr/lib/python*/*-packages/_tevent.so
 	rm $(DESTDIR)/usr/lib/python*/*-packages/tevent.py
 	# Already included in various system packages
-	rm -r $(DESTDIR)/usr/lib/python*/*-packages/samba/external
+	#rm -r $(DESTDIR)/usr/lib/python*/*-packages/samba/external
 	# Already documented in debian/copyright
 	-rm $(DESTDIR)/usr/share/samba/setup/ad-schema/licence.txt
 	# System ldb loads its modules from a different path
@@ -110,7 +110,7 @@ override_dh_install:
 	# we don't ship the symlinks
 	rm $(DESTDIR)/lib/$(DEB_HOST_MULTIARCH)/libnss_*.so
 	#Remove unused ldb share configuration plugin
-	rm $(DESTDIR)/usr/lib/$(DEB_HOST_MULTIARCH)/samba/share/ldb.so
+	#rm $(DESTDIR)/usr/lib/$(DEB_HOST_MULTIARCH)/samba/share/ldb.so
 	#Remove unused vfstest manpage as there is no more vfstest apparently
 	rm $(DESTDIR)/usr/share/man/man1/vfstest.1
 	mkdir -p $(DESTDIR)/usr/lib/$(DEB_HOST_MULTIARCH)/plugin/krb5
