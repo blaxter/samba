@@ -3,13 +3,13 @@ Author: Christian Perrier <bubulle@debian.org>
 Bug-Debian: http://bugs.debian.org/221618
 Forwarded: http://bugs.debian.org/cgi-bin/bugreport.cgi?bug=221618#27
 
-Index: samba/source3/include/libsmbclient.h
+Index: samba-debian-pkg/source3/include/libsmbclient.h
 ===================================================================
---- samba.orig/source3/include/libsmbclient.h
-+++ samba/source3/include/libsmbclient.h
-@@ -79,6 +79,16 @@
- #include <fcntl.h>
- #include <utime.h>
+--- samba-debian-pkg.orig/source3/include/libsmbclient.h	2015-10-07 04:58:32.000000000 -0700
++++ samba-debian-pkg/source3/include/libsmbclient.h	2015-10-07 04:58:32.671575124 -0700
+@@ -90,6 +90,16 @@
+ #endif
+ #define _FILE_OFFSET_BITS 64
  
 +  /* Debian bug #221618 */
 +#ifdef _LARGEFILE64_SOURCE
